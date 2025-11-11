@@ -723,50 +723,56 @@ pub mod battlechain_v2 {
                 let fee = ((total as u128) * (cfg.fee_bps as u128) / 10_000u128) as u64;
                 let payout = total.saturating_sub(fee);
                 // transfer fee to treasury
+                let battle_seeds = &[b"battle" as &[u8], &ctx.accounts.offer.offer_nonce.to_le_bytes(), ctx.accounts.offer.creator.as_ref(), battle.player2.as_ref(), &[battle.bump]];
                 if fee > 0 {
-                    invoke_signed(&system_instruction::transfer(&ctx.accounts.battle.key(), &ctx.accounts.treasury.key(), fee), &[ctx.accounts.battle.to_account_info(), ctx.accounts.treasury.to_account_info()], &[&[b"battle", &battle.battle_id.to_le_bytes(), &[battle.bump]]])?;
+                    invoke_signed(&system_instruction::transfer(&ctx.accounts.battle.key(), &ctx.accounts.treasury.key(), fee), &[ctx.accounts.battle.to_account_info(), ctx.accounts.treasury.to_account_info()], &[battle_seeds])?;
                 }
                 if let Some(winner_pk) = battle.winner {
                     let dest = if winner_pk == battle.player1 { &ctx.accounts.player1_owner } else { &ctx.accounts.player2_owner };
-                    invoke_signed(&system_instruction::transfer(&ctx.accounts.battle.key(), &dest.key(), payout), &[ctx.accounts.battle.to_account_info(), dest.to_account_info()], &[&[b"battle", &battle.battle_id.to_le_bytes(), &[battle.bump]]])?;
+                    invoke_signed(&system_instruction::transfer(&ctx.accounts.battle.key(), &dest.key(), payout), &[ctx.accounts.battle.to_account_info(), dest.to_account_info()], &[battle_seeds])?;
                 } else {
                     // draw -> treasury
-                    invoke_signed(&system_instruction::transfer(&ctx.accounts.battle.key(), &ctx.accounts.treasury.key(), payout), &[ctx.accounts.battle.to_account_info(), ctx.accounts.treasury.to_account_info()], &[&[b"battle", &battle.battle_id.to_le_bytes(), &[battle.bump]]])?;
+                    invoke_signed(&system_instruction::transfer(&ctx.accounts.battle.key(), &ctx.accounts.treasury.key(), payout), &[ctx.accounts.battle.to_account_info(), ctx.accounts.treasury.to_account_info()], &[battle_seeds])?;
                 }
             },
             Currency::SPL(_) => {
                 // token transfers using CPI from battle_escrow to winner ATA / treasury
-                let total_tokens = ctx.accounts.battle_escrow.amount;
+                let battle_escrow = ctx.accounts.battle_escrow.as_ref().ok_or(GameError::InvalidNftAta)?;
+                let total_tokens = battle_escrow.amount;
                 let fee_amt = ((total_tokens as u128) * (cfg.fee_bps as u128) / 10_000u128) as u64;
                 let payout_amt = total_tokens.saturating_sub(fee_amt);
+                let battle_seeds = &[b"battle" as &[u8], &ctx.accounts.offer.offer_nonce.to_le_bytes(), ctx.accounts.offer.creator.as_ref(), battle.player2.as_ref(), &[battle.bump]];
                 // transfer fee to treasury_ata
                 if fee_amt > 0 {
+                    let treasury_ata = ctx.accounts.treasury_ata.as_ref().ok_or(GameError::InvalidNftAta)?;
                     let cpi_accounts = token::Transfer {
-                        from: ctx.accounts.battle_escrow.to_account_info(),
-                        to: ctx.accounts.treasury_ata.to_account_info(),
+                        from: battle_escrow.to_account_info(),
+                        to: treasury_ata.to_account_info(),
                         authority: ctx.accounts.battle.to_account_info(),
                     };
-                    let signer_seeds = &[&[b"battle", &battle.battle_id.to_le_bytes(), &[battle.bump]][..]];
-                    token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, signer_seeds), fee_amt)?;
+                    token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, &[battle_seeds]), fee_amt)?;
                 }
                 if let Some(winner_pk) = battle.winner {
-                    let dest_ata = if winner_pk == battle.player1 { &ctx.accounts.player1_ata } else { &ctx.accounts.player2_ata };
+                    let dest_ata = if winner_pk == battle.player1 {
+                        ctx.accounts.player1_ata.as_ref().ok_or(GameError::InvalidNftAta)?
+                    } else {
+                        ctx.accounts.player2_ata.as_ref().ok_or(GameError::InvalidNftAta)?
+                    };
                     let cpi_accounts = token::Transfer {
-                        from: ctx.accounts.battle_escrow.to_account_info(),
+                        from: battle_escrow.to_account_info(),
                         to: dest_ata.to_account_info(),
                         authority: ctx.accounts.battle.to_account_info(),
                     };
-                    let signer_seeds = &[&[b"battle", &battle.battle_id.to_le_bytes(), &[battle.bump]][..]];
-                    token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, signer_seeds), payout_amt)?;
+                    token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, &[battle_seeds]), payout_amt)?;
                 } else {
                     // draw -> treasury_ata
+                    let treasury_ata = ctx.accounts.treasury_ata.as_ref().ok_or(GameError::InvalidNftAta)?;
                     let cpi_accounts = token::Transfer {
-                        from: ctx.accounts.battle_escrow.to_account_info(),
-                        to: ctx.accounts.treasury_ata.to_account_info(),
+                        from: battle_escrow.to_account_info(),
+                        to: treasury_ata.to_account_info(),
                         authority: ctx.accounts.battle.to_account_info(),
                     };
-                    let signer_seeds = &[&[b"battle", &battle.battle_id.to_le_bytes(), &[battle.bump]][..]];
-                    token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, signer_seeds), payout_amt)?;
+                    token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, &[battle_seeds]), payout_amt)?;
                 }
             }
         }
@@ -1009,17 +1015,19 @@ pub struct FinalizeBattle<'info> {
 // ACCOUNTS / STRUCTS
 // ------------------------
 #[account]
+#[derive(InitSpace)]
 pub struct Config {
     pub admin: Pubkey,
     pub fee_bps: u16,
     pub inactivity_timeout: i64,
+    #[max_len(8)]
     pub spl_whitelist: Vec<Pubkey>,
     pub trait_authority: Pubkey,
     pub bump: u8,
 }
-impl Config { pub const INIT_SPACE: usize = 32 + 2 + 8 + 4 + (32 * 8) + 32 + 1; }
 
 #[account]
+#[derive(InitSpace)]
 pub struct EntropyPool {
     pub authority: Pubkey,
     pub vrf_oracle: Pubkey,
@@ -1031,18 +1039,17 @@ pub struct EntropyPool {
     pub last_refill_ts: i64,
     pub batches: [SeedBatch; MAX_BATCHES],
 }
-impl EntropyPool { pub const INIT_SPACE: usize = 32 + 32 + 1 + 1 + 8 + 8 + 1 + 8 + (SeedBatch::SIZE * MAX_BATCHES); }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
 pub struct SeedBatch {
     pub seed: [u8; SEED_LEN],
     pub start: u64,
     pub count: u32,
     pub consumed: u32,
 }
-impl SeedBatch { pub const SIZE: usize = SEED_LEN + 8 + 4 + 4; }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Character {
     pub nft_mint: Pubkey,
     pub base_class: CharacterClass,
@@ -1066,11 +1073,9 @@ pub struct Character {
     pub created_at: i64,
     pub bump: u8,
 }
-impl Character {
-    pub const INIT_SPACE: usize = 32 + 1 + 4 + 4 + 2 + 2 + 2 + 4 + 2 + 2 + 1 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 8 + 1;
-}
 
 #[account]
+#[derive(InitSpace)]
 pub struct Progression {
     pub nft_mint: Pubkey,
     pub xp: u64,
@@ -1079,9 +1084,9 @@ pub struct Progression {
     pub last_played: i64,
     pub bump: u8,
 }
-impl Progression { pub const INIT_SPACE: usize = 32 + 8 + 2 + 8 + 8 + 1; }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Offer {
     pub creator: Pubkey,
     pub offer_nonce: u64,
@@ -1089,6 +1094,7 @@ pub struct Offer {
     pub stake_amount: u64,
     pub min_level: u16,
     pub max_level: u16,
+    #[max_len(5)]
     pub allowed_classes: Vec<CharacterClass>,
     pub auto_approve: bool,
     pub start_ts: i64,
@@ -1097,9 +1103,9 @@ pub struct Offer {
     pub is_active: bool,
     pub bump: u8,
 }
-impl Offer { pub const INIT_SPACE: usize = 32 + 8 + (1 + 32) + 8 + 2 + 2 + 4 + (1 * 5) + 1 + 8 + 8 + 8 + 1 + 1; }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Request {
     pub offer: Pubkey,
     pub challenger: Pubkey,
@@ -1109,9 +1115,9 @@ pub struct Request {
     pub status: JoinStatus,
     pub bump: u8,
 }
-impl Request { pub const INIT_SPACE: usize = 32 + 32 + 32 + 8 + 8 + 1 + 1; }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Battle {
     pub battle_id: u64,
     pub player1: Pubkey,
@@ -1139,24 +1145,23 @@ pub struct Battle {
     pub last_entropy_index: u64,
     pub bump: u8,
 }
-impl Battle { pub const INIT_SPACE: usize = 8 + 32 + 32 + 8 + 1 + 8 + 8 + 8 + 1 + 1 + 1 + 8 + 8 + 8 + (1 + 32) + 8 + 8 + 1 + 1 + 2 + 2 + 2 + 2 + 8 + 1; }
 
 // ------------------------
 // ENUMS & SMALL TYPES
 // ------------------------
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
 pub enum CharacterClass { Warrior=0, Assassin=1, Mage=2, Tank=3, Trickster=4 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
 pub enum BattleState { Waiting=0, Active=1, Finished=2 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
 pub enum StanceType { Balanced=0, Aggressive=1, Defensive=2, Berserker=3, Counter=4 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
 pub enum JoinStatus { Pending=0, Approved=1, Rejected=2, Withdrawn=3 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace, Debug)]
 pub enum Currency {
     SOL,
     SPL(Pubkey),
@@ -1257,9 +1262,9 @@ impl EntropyPool {
         let offset = batch.start.saturating_add(batch.consumed as u64);
         let mut tn_bytes = [0u8; 4];
         tn_bytes.copy_from_slice(&turn_number.to_le_bytes());
-        let h = hashv(&[&batch.seed, &offset.to_le_bytes(), &signer.to_bytes(), user_seed, &tn_bytes]).0;
+        let h = hashv(&[&batch.seed, &offset.to_le_bytes(), &signer.to_bytes(), user_seed, &tn_bytes]);
         let mut arr = [0u8; 8];
-        arr.copy_from_slice(&h[0..8]);
+        arr.copy_from_slice(&h.as_ref()[0..8]);
         let mut val = u64::from_le_bytes(arr);
         let range = max - min + 1;
         val = min + (val % range);
