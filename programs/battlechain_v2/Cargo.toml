@@ -1,0 +1,21 @@
+[package]
+name = "battlechain_v2"
+version = "0.1.0"
+description = "BattleChain v2 - Fully onchain battle game"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "battlechain_v2"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.25.0"
+anchor-spl = "0.25.0"
+wasm-bindgen = "=0.2.92"
