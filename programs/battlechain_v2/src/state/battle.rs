@@ -25,6 +25,10 @@ pub struct Battle {
     pub start_ts: i64,
     pub current_turn: u8,
     pub turn_number: u64,
+    // Round tracking
+    pub current_round: u8,
+    pub rounds_completed: u8,
+    pub turns_in_current_round: u8,
     pub player1_health: u64,
     pub player2_health: u64,
     pub state: BattleState,

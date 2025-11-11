@@ -7,14 +7,20 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("7rCHo4qDucdmW8FWQTvPCRtg6Y5vNSLj8L7vbuKiQ9Pu");
 
-// Fixed-point & limits
-pub const FP_SCALE: u128 = 1_000_000u128;
-pub const DEFAULT_CRIT_FP: u128 = FP_SCALE * 2;
-pub const MAX_TOTAL_MULTIPLIER_FP: u128 = FP_SCALE * 10;
-pub const MAX_COMBO_STACK: u8 = 5;
-pub const SEED_LEN: usize = 32;
-pub const MAX_BATCHES: usize = 8;
-pub const MIN_ENTROPY_PER_TURN: u64 = 1;
+// Module declarations
+pub mod constants;
+pub mod errors;
+pub mod events;
+pub mod state;
+pub mod utils;
+pub mod instructions;
+
+// Re-exports for backward compatibility
+pub use constants::*;
+pub use errors::*;
+pub use events::*;
+pub use state::*;
+pub use utils::*;
 
 #[program]
 pub mod battlechain_v2 {
@@ -585,6 +591,10 @@ pub mod battlechain_v2 {
         battle.start_ts = start_ts;
         battle.current_turn = 0;
         battle.turn_number = 0;
+        // Round tracking initialization
+        battle.current_round = 1;
+        battle.rounds_completed = 0;
+        battle.turns_in_current_round = 0;
         battle.player1_health = 100;
         battle.player2_health = 100;
         battle.state = BattleState::Active;
@@ -753,6 +763,14 @@ pub mod battlechain_v2 {
             stake_total: total_stake
         });
         Ok(())
+    }
+
+    /// Execute a full round (3 turns) - gas optimized batched execution
+    pub fn execute_round(
+        ctx: Context<ExecuteRound>,
+        round_moves: instructions::round_execution::RoundMoves,
+    ) -> Result<()> {
+        instructions::round_execution::execute_round_handler(ctx, round_moves)
     }
 
     pub fn execute_turn(
@@ -1493,6 +1511,29 @@ pub struct ApproveChallenger<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// Context for execute_round (batched turn execution)
+#[derive(Accounts)]
+pub struct ExecuteRound<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, EntropyPool>,
+    #[account(mut)]
+    pub battle: Account<'info, Battle>,
+    #[account(mut)]
+    pub attacker_character: Account<'info, Character>,
+    #[account(mut)]
+    pub defender_character: Account<'info, Character>,
+    #[account(mut)]
+    pub attacker_prog: Account<'info, Progression>,
+    #[account(mut)]
+    pub defender_prog: Account<'info, Progression>,
+    #[account(mut)]
+    pub attacker_nft_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub defender_nft_ata: Account<'info, TokenAccount>,
+    pub signer: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
 #[derive(Accounts)]
 pub struct ExecuteTurn<'info> {
     #[account(mut)]
@@ -1565,199 +1606,12 @@ pub struct ApplyTraitBundle<'info> {
 }
 
 // ------------------------
-// ACCOUNTS / STRUCTS
+// NOTE: All account structs and enums are defined in the state module
+// and re-exported via `pub use state::*;` at the top of this file.
+// This includes: Config, EntropyPool, SeedBatch, Character, Progression,
+// Offer, Request, Battle, CharacterClass, BattleState, StanceType,
+// JoinStatus, Currency, TraitBundle
 // ------------------------
-#[account]
-#[derive(InitSpace)]
-pub struct Config {
-    pub admin: Pubkey,
-    pub fee_bps: u16,
-    pub inactivity_timeout: i64,
-    #[max_len(8)]
-    pub spl_whitelist: Vec<Pubkey>,
-    pub trait_authority: Pubkey,
-    pub bump: u8,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct EntropyPool {
-    pub authority: Pubkey,
-    pub vrf_oracle: Pubkey,
-    pub head: u8,
-    pub tail: u8,
-    pub total_available: u64,
-    pub global_next_index: u64,
-    pub bump: u8,
-    pub last_refill_ts: i64,
-    pub batches: [SeedBatch; MAX_BATCHES],
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
-pub struct SeedBatch {
-    pub seed: [u8; SEED_LEN],
-    pub start: u64,
-    pub count: u32,
-    pub consumed: u32,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct Character {
-    pub nft_mint: Pubkey,
-    pub base_class: CharacterClass,
-    pub max_hp: u32,
-    pub current_hp: u32,
-    pub base_damage_min: u16,
-    pub base_damage_max: u16,
-    pub crit_bps: u16,
-    pub crit_multiplier_fp: u32,
-    pub dodge_bps: u16,
-    pub defense: u16,
-    pub special_cooldown: u8,
-    pub last_base_damage: u16,
-    pub combo_count: u8,
-    pub lifes: u8,
-    // trait modifiers:
-    pub mod_attack_bps: i16,
-    pub mod_defense_bps: i16,
-    pub mod_crit_bps: i16,
-    pub rarity: u8,
-    pub created_at: i64,
-    pub bump: u8,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct Progression {
-    pub nft_mint: Pubkey,
-    pub xp: u64,
-    pub level: u16,
-    pub mmr: u64,
-    pub last_played: i64,
-    pub bump: u8,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct Offer {
-    pub creator: Pubkey,
-    pub offer_nonce: u64,
-    pub currency: Currency,
-    pub stake_amount: u64,
-    pub min_level: u16,
-    pub max_level: u16,
-    #[max_len(5)]
-    pub allowed_classes: Vec<CharacterClass>,
-    pub auto_approve: bool,
-    pub start_ts: i64,
-    pub inactivity_timeout: i64,
-    pub created_at: i64,
-    pub is_active: bool,
-    pub bump: u8,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct Request {
-    pub offer: Pubkey,
-    pub challenger: Pubkey,
-    pub character: Pubkey,
-    pub offered_stake: u64,
-    pub created_at: i64,
-    pub status: JoinStatus,
-    pub bump: u8,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct Battle {
-    pub battle_id: u64,
-    pub player1: Pubkey,
-    pub player2: Pubkey,
-    pub start_ts: i64,
-    pub current_turn: u8,
-    pub turn_number: u64,
-    pub player1_health: u64,
-    pub player2_health: u64,
-    pub state: BattleState,
-    pub player1_stance: StanceType,
-    pub player2_stance: StanceType,
-    pub created_at: i64,
-    pub inactivity_timeout: i64,
-    pub last_action_ts: i64,
-    pub winner: Option<Pubkey>,
-    pub player1_dot_damage: u64,
-    pub player2_dot_damage: u64,
-    pub player1_dot_turns: u8,
-    pub player2_dot_turns: u8,
-    pub player1_reflection: u16,
-    pub player2_reflection: u16,
-    pub player1_miss_count: u16,
-    pub player2_miss_count: u16,
-    pub last_entropy_index: u64,
-    pub bump: u8,
-    pub player1_used_wildcard: bool,
-    pub player2_used_wildcard: bool,
-    pub player1_special_used: bool,
-    pub player2_special_used: bool,
-    pub player1_preference: u8,
-    pub player2_preference: u8,
-    pub player1_pref_set: bool,
-    pub player2_pref_set: bool,
-}
-
-// ------------------------
-// ENUMS & SMALL TYPES
-// ------------------------
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
-pub enum CharacterClass {
-    Warrior,
-    Assassin,
-    Mage,
-    Tank,
-    Trickster,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
-pub enum BattleState {
-    Waiting,
-    Active,
-    Finished,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
-pub enum StanceType {
-    Balanced,
-    Aggressive,
-    Defensive,
-    Berserker,
-    Counter,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
-pub enum JoinStatus {
-    Pending,
-    Approved,
-    Rejected,
-    Withdrawn,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace, Debug)]
-pub enum Currency {
-    SOL,
-    SPL(Pubkey),
-}
-
-// Trait bundle
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
-pub struct TraitBundle {
-    pub rarity: u8,
-    pub attack_bps: i16,
-    pub defense_bps: i16,
-    pub crit_bps: i16,
-    pub nonce: i64,
-}
 
 // ------------------------
 // EVENTS
@@ -1915,310 +1769,16 @@ pub struct ProgressionLevelUp {
 }
 
 // ------------------------
-// HELPERS: FP math, entropy consumption, levelup
+// NOTE: All helper functions are defined in their respective modules:
+// - Math functions (mul_fp_checked, fp_to_u64_clamped, derive_u64_from_seed_bytes) - utils/math.rs
+// - Stance functions (stance_multipliers, sample_stance_with_preference) - utils/stance.rs
+// - Wildcard effects (apply_wildcard_effect) - utils/wildcard.rs
+// - Level up logic (level_up_if_needed, next_level_xp) - utils/levelup.rs
+// - Entropy consumption (EntropyPool impl) - state/entropy.rs
+// All are re-exported via `pub use utils::*;` and `pub use state::*;`
 // ------------------------
-fn mul_fp_checked(value_fp: u128, mul_fp: u128) -> Result<u128> {
-    let prod = value_fp
-        .checked_mul(mul_fp)
-        .ok_or(GameError::MathOverflow)?;
-    Ok(prod.checked_div(FP_SCALE).ok_or(GameError::MathOverflow)?)
-}
-
-fn fp_to_u64_clamped(value_fp: u128, err: GameError) -> Result<u64> {
-    let val = value_fp.checked_div(FP_SCALE).ok_or(err)?;
-    if val > (u64::MAX as u128) {
-        return Err(err.into());
-    }
-    Ok(val as u64)
-}
-
-// stance multipliers: returns attacker_fp, defender_fp, self_damage_bps, counter_bps
-fn stance_multipliers(att: StanceType, def: StanceType) -> (u128, u128, u16, u16) {
-    let mut att_fp = FP_SCALE;
-    let mut def_fp = FP_SCALE;
-    let mut self_bps = 0u16;
-    let mut counter_bps = 0u16;
-    match att {
-        StanceType::Aggressive => att_fp = FP_SCALE * 130 / 100,
-        StanceType::Defensive => att_fp = FP_SCALE * 70 / 100,
-        StanceType::Berserker => {
-            att_fp = FP_SCALE * 200 / 100;
-            self_bps = 2500;
-        }
-        StanceType::Counter => att_fp = FP_SCALE * 90 / 100,
-        StanceType::Balanced => {}
-    }
-    match def {
-        StanceType::Defensive => def_fp = FP_SCALE * 50 / 100,
-        StanceType::Aggressive => def_fp = FP_SCALE * 150 / 100,
-        StanceType::Counter => counter_bps = 4000,
-        _ => {}
-    }
-    (att_fp, def_fp, self_bps, counter_bps)
-}
-
-// Entropy consumption: read one batch entry, return the 32-byte derived seed + global index
-impl EntropyPool {
-    pub fn consume_seed_bytes_return_index(
-        &mut self,
-        signer: &Pubkey,
-        user_tag: &[u8],
-        turn_number: u32,
-    ) -> Result<([u8; 32], u64)> {
-        require!(self.total_available > 0, GameError::NoEntropyAvailable);
-
-        // find head batch
-        let mut idx = self.head as usize % MAX_BATCHES;
-        // skip empty batches
-        while self.batches[idx].count <= self.batches[idx].consumed {
-            idx = (idx + 1) % MAX_BATCHES;
-            // if looped fully and nothing available
-            if idx == (self.head as usize % MAX_BATCHES) {
-                return Err(error!(GameError::NoEntropyAvailable).into());
-            }
-        }
-        let batch = &mut self.batches[idx];
-        let offset = batch.start.saturating_add(batch.consumed as u64);
-        let mut tn_bytes = [0u8; 4];
-        tn_bytes.copy_from_slice(&turn_number.to_le_bytes());
-
-        // Build the hash input: seed || offset_le || signer || user_tag || turn_number
-        let h = hashv(&[
-            &batch.seed,
-            &offset.to_le_bytes(),
-            &signer.to_bytes(),
-            user_tag,
-            &tn_bytes,
-        ]).to_bytes();
-
-        // update consumed counts and pool counters
-        batch.consumed = batch.consumed.saturating_add(1);
-        self.total_available = self.total_available.saturating_sub(1);
-        let used_global_index = offset;
-        if batch.consumed >= batch.count {
-            // advance head
-            self.head = ((self.head as usize + 1) % MAX_BATCHES) as u8;
-        }
-
-        Ok((h, used_global_index))
-    }
-}
-
-// derive independent u64 from seed bytes using tag
-fn derive_u64_from_seed_bytes(seed: &[u8; 32], tag: u8) -> u64 {
-    let h = hashv(&[seed, &[tag]]).to_bytes();
-    let mut arr = [0u8; 8];
-    arr.copy_from_slice(&h[0..8]);
-    u64::from_le_bytes(arr)
-}
-
-// sample stance with preference bias + class bias
-fn sample_stance_with_preference(class: CharacterClass, pref: (bool, u8), rng: u64) -> StanceType {
-    // baseline weights
-    // Balanced=40, Aggressive=20, Defensive=20, Berserker=10, Counter=10 (sum=100)
-    let mut weights = vec![
-        (StanceType::Balanced, 40u32),
-        (StanceType::Aggressive, 20u32),
-        (StanceType::Defensive, 20u32),
-        (StanceType::Berserker, 10u32),
-        (StanceType::Counter, 10u32),
-    ];
-
-    // class biases (small adjustments)
-    match class {
-        CharacterClass::Warrior => {
-            // slightly favor Berserker and Aggressive
-            adjust_weight(&mut weights, StanceType::Berserker, 5);
-            adjust_weight(&mut weights, StanceType::Aggressive, 3);
-        }
-        CharacterClass::Assassin => {
-            adjust_weight(&mut weights, StanceType::Aggressive, 6);
-            adjust_weight(&mut weights, StanceType::Counter, 2);
-        }
-        CharacterClass::Mage => {
-            adjust_weight(&mut weights, StanceType::Defensive, 4);
-            adjust_weight(&mut weights, StanceType::Balanced, 3);
-        }
-        CharacterClass::Tank => {
-            adjust_weight(&mut weights, StanceType::Defensive, 8);
-            adjust_weight(&mut weights, StanceType::Counter, 2);
-        }
-        CharacterClass::Trickster => {
-            adjust_weight(&mut weights, StanceType::Aggressive, 4);
-            adjust_weight(&mut weights, StanceType::Balanced, 4);
-        }
-    }
-
-    // preference bias if set
-    if pref.0 {
-        let pref_st = match pref.1 {
-            0 => StanceType::Balanced,
-            1 => StanceType::Aggressive,
-            2 => StanceType::Defensive,
-            3 => StanceType::Berserker,
-            4 => StanceType::Counter,
-            _ => StanceType::Balanced,
-        };
-        // multiply preference weight by factor
-        multiply_weight(&mut weights, pref_st, 3u32); // 3x bias
-    }
-
-    // sample using rng
-    let total: u128 = weights.iter().map(|(_, w)| *w as u128).sum();
-    let pick = (rng as u128) % total;
-    let mut acc = 0u128;
-    for (st, w) in weights {
-        acc += w as u128;
-        if pick < acc {
-            return st;
-        }
-    }
-    StanceType::Balanced
-}
-
-fn adjust_weight(weights: &mut Vec<(StanceType, u32)>, stance: StanceType, delta: i32) {
-    for (st, w) in weights.iter_mut() {
-        if *st == stance {
-            let nw = (*w as i32).saturating_add(delta);
-            *w = nw.max(0) as u32;
-        }
-    }
-}
-
-fn multiply_weight(weights: &mut Vec<(StanceType, u32)>, stance: StanceType, factor: u32) {
-    for (st, w) in weights.iter_mut() {
-        if *st == stance {
-            *w = (*w).saturating_mul(factor);
-        }
-    }
-}
-
-// simple wildcard effect application (example weighted outcomes)
-fn apply_wildcard_effect(
-    wild_roll: u64,
-    damage_fp: &mut u128,
-    battle: &mut Account<Battle>,
-    att: &mut Account<Character>,
-    _def: &mut Account<Character>,
-) -> Result<u8> {
-    // Table:
-    // 0..3999 => +25% damage (40%)
-    // 4000..6999 => heal attacker 10 hp (30%)
-    // 7000..8499 => stun opponent next turn (15%) => we won't implement full stun here; reserved
-    // 8500..9499 => nothing (10%)
-    // 9500..9999 => huge effect double damage (5%)
-    let r = wild_roll % 10000;
-    if r < 4000 {
-        // +25%
-        let add_fp = FP_SCALE * 125 / 100; // 1.25
-        *damage_fp = mul_fp_checked(*damage_fp, add_fp)?;
-        return Ok(1);
-    } else if r < 7000 {
-        // heal attacker 10 hp
-        att.current_hp = att.current_hp.saturating_add(10);
-        if att.current_hp > att.max_hp {
-            att.current_hp = att.max_hp;
-        }
-        return Ok(2);
-    } else if r < 8500 {
-        // reserved for stun: apply as dot to opponent as light penalty (represent stun as small dot for now)
-        if att.nft_mint == battle.player1 {
-            battle.player2_dot_damage = battle.player2_dot_damage.saturating_add(2);
-            battle.player2_dot_turns = battle.player2_dot_turns.saturating_add(1);
-        } else {
-            battle.player1_dot_damage = battle.player1_dot_damage.saturating_add(2);
-            battle.player1_dot_turns = battle.player1_dot_turns.saturating_add(1);
-        }
-        return Ok(3);
-    } else if r < 9500 {
-        // nothing
-        return Ok(4);
-    } else {
-        // double damage
-        *damage_fp = mul_fp_checked(*damage_fp, FP_SCALE * 2)?;
-        return Ok(5);
-    }
-}
-
-// level up logic: simple quadratic XP curve
-fn next_level_xp(level: u16) -> u64 {
-    // 100 * level^2
-    let l = level as u64;
-    100u64.saturating_mul(l.saturating_mul(l))
-}
-fn level_up_if_needed(prog: &mut Account<Progression>, ch: &mut Account<Character>) -> Result<()> {
-    loop {
-        let need = next_level_xp(prog.level);
-        if prog.xp >= need {
-            prog.xp = prog.xp.saturating_sub(need);
-            prog.level = prog.level.saturating_add(1);
-            // evolve stats modestly
-            ch.max_hp = ch.max_hp.saturating_add((ch.max_hp / 20).max(1)); // +5%
-            ch.current_hp = ch.max_hp;
-            ch.base_damage_min = ch
-                .base_damage_min
-                .saturating_add((ch.base_damage_min / 10).max(1));
-            ch.base_damage_max = ch
-                .base_damage_max
-                .saturating_add((ch.base_damage_max / 10).max(1));
-            emit!(ProgressionLevelUp {
-                nft_mint: prog.nft_mint,
-                new_level: prog.level
-            });
-        } else {
-            break;
-        }
-    }
-    Ok(())
-}
 
 // ------------------------
-// ERRORS
+// NOTE: All errors are defined in errors.rs
+// and re-exported via `pub use errors::*;`
 // ------------------------
-#[error_code]
-pub enum GameError {
-    #[msg("Unauthorized refill")]
-    UnauthorizedRefill,
-    #[msg("Seed replay")]
-    SeedReplay,
-    #[msg("Entropy pool full")]
-    EntropyPoolFull,
-    #[msg("No entropy available")]
-    NoEntropyAvailable,
-    #[msg("Invalid index")]
-    InvalidIndex,
-    #[msg("Invalid range")]
-    InvalidRange,
-    #[msg("Math overflow")]
-    MathOverflow,
-    #[msg("Invalid NFT token account")]
-    InvalidNftAta,
-    #[msg("Not NFT owner")]
-    NotNftOwner,
-    #[msg("Offer not active")]
-    OfferNotActive,
-    #[msg("Character fails constraints")]
-    CharacterConstraint,
-    #[msg("Unauthorized")]
-    Unauthorized,
-    #[msg("Invalid request state")]
-    InvalidRequestState,
-    #[msg("Invalid battle state")]
-    InvalidBattleState,
-    #[msg("Battle already finished")]
-    BattleAlreadyFinished,
-    #[msg("Not your turn")]
-    NotYourTurn,
-    #[msg("Special on cooldown")]
-    SpecialOnCooldown,
-    #[msg("Invalid timestamp")]
-    InvalidTimestamp,
-    #[msg("Battle not finished")]
-    BattleNotFinished,
-    #[msg("Auto-approve disabled")]
-    AutoApproveDisabled,
-    #[msg("SPL not whitelisted")]
-    SPLNotWhitelisted,
-    #[msg("Timeout not reached")]
-    TimeoutNotReached,
-}

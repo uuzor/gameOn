@@ -6,3 +6,8 @@ pub const MAX_COMBO_STACK: u8 = 5;
 pub const SEED_LEN: usize = 32;
 pub const MAX_BATCHES: usize = 8;
 pub const MIN_ENTROPY_PER_TURN: u64 = 1;
+
+// Round system constants
+pub const MAX_ROUNDS: u8 = 3;
+pub const TURNS_PER_ROUND: u8 = 3;
+pub const MAX_TOTAL_TURNS: u8 = MAX_ROUNDS * TURNS_PER_ROUND; // 9 turns max

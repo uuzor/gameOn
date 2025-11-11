@@ -174,3 +174,11 @@ pub struct ProgressionLevelUp {
     pub nft_mint: Pubkey,
     pub new_level: u16,
 }
+
+#[event]
+pub struct RoundCompleted {
+    pub battle: Pubkey,
+    pub round_number: u8,
+    pub turns_executed: u8,
+    pub battle_ended: bool,
+}
