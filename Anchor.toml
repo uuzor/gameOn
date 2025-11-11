@@ -3,6 +3,7 @@ seeds = false
 skip-lint = false
 [programs.devnet]
 solana_hello_world = "Ecr5UgGyJTnKraLRPYBXrK9RD7DfoVDYfSioVksnnfjA"
+battlechain_v2 = "7rCHo4qDucdmW8FWQTvPCRtg6Y5vNSLj8L7vbuKiQ9Pu"
 
 [registry]
 url = "https://api.apr.dev"

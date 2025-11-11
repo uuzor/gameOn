@@ -1,7 +1,9 @@
 [workspace]
 members = [
-    "programs/*"
+    "programs/battlechain_v2",
+    # "programs/solana-hello-world"  # Excluded due to anchor version conflict
 ]
+resolver = "2"
 
 [profile.release]
 overflow-checks = true
