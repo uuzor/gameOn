@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "programs/battlechain_v2",
+    "programs/prediction_market",
     # "programs/solana-hello-world"  # Excluded due to anchor version conflict
 ]
 resolver = "2"

@@ -80,6 +80,12 @@ pub enum PredictionMarketError {
     #[msg("Betting period has ended")]
     BettingEnded,
 
+    #[msg("Betting period has ended, no more trading")]
+    BettingPeriodEnded,
+
+    #[msg("Betting period has not ended yet")]
+    BettingPeriodNotEnded,
+
     #[msg("Cannot resolve before betting ends")]
     TooEarlyToResolve,
 
@@ -130,4 +136,34 @@ pub enum PredictionMarketError {
 
     #[msg("Numerical overflow in conversion")]
     ConversionOverflow,
+
+    #[msg("Insufficient shares to sell")]
+    InsufficientShares,
+
+    #[msg("Insufficient funds in market")]
+    InsufficientFunds,
+
+    #[msg("Match has not been completed yet")]
+    MatchNotCompleted,
+
+    #[msg("Invalid match status")]
+    InvalidMatchStatus,
+
+    #[msg("No winner has been set for this match")]
+    NoWinnerSet,
+
+    #[msg("No outcome has been set for this market")]
+    NoOutcomeSet,
+
+    #[msg("No winnings to claim")]
+    NoWinningsToClaim,
+
+    #[msg("Market has not been cancelled")]
+    MarketNotCancelled,
+
+    #[msg("No refund available")]
+    NoRefundAvailable,
+
+    #[msg("Insufficient LP shares")]
+    InsufficientLPShares,
 }

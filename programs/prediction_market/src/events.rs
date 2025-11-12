@@ -32,9 +32,10 @@ pub struct SharesSold {
     pub is_yes: bool,
     pub shares_in: u64,
     pub amount_out: u64,
-    pub fee_paid: u64,
-    pub new_yes_pool: u64,
-    pub new_no_pool: u64,
+    pub price_impact: u16,
+    pub fee_amount: u64,
+    pub yes_price: u16,
+    pub no_price: u16,
 }
 
 #[event]
@@ -55,6 +56,8 @@ pub struct LiquidityRemoved {
     pub yes_amount: u64,
     pub no_amount: u64,
     pub fees_earned: u64,
+    pub impermanent_loss: i64,
+    pub total_liquidity: u64,
 }
 
 #[event]
@@ -71,23 +74,39 @@ pub struct MarketLocked {
 #[event]
 pub struct MarketResolved {
     pub market: Pubkey,
-    pub scheduled_match: Pubkey,
-    pub battle: Pubkey,
+    pub match_id: u64,
     pub outcome: bool, // true = YES wins (player1), false = NO wins (player2)
     pub winner: Pubkey,
+    pub yes_pool: u64,
+    pub no_pool: u64,
+    pub total_volume: u64,
+    pub final_yes_price: u16,
+    pub final_no_price: u16,
     pub resolved_at: i64,
-    pub total_yes_shares: u64,
-    pub total_no_shares: u64,
-    pub total_payout: u64,
 }
 
 #[event]
 pub struct WinningsClaimed {
     pub market: Pubkey,
     pub claimer: Pubkey,
-    pub shares_burned: u64,
     pub payout: u64,
-    pub currency: u8,
+    pub outcome: bool,
+    pub net_pnl: i64,
+}
+
+#[event]
+pub struct MarketCancelled {
+    pub market: Pubkey,
+    pub match_id: u64,
+    pub reason: String,
+    pub cancelled_at: i64,
+}
+
+#[event]
+pub struct RefundClaimed {
+    pub market: Pubkey,
+    pub claimer: Pubkey,
+    pub refund_amount: u64,
 }
 
 #[event]
